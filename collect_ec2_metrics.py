@@ -36,8 +36,8 @@ def parse_arguments():
     )
     parser.add_argument(
         '--build-number',
-        default=os.environ.get('BUILD_NUMBER', 'local'),
-        help="Jenkins build number or identifier (default: BUILD_NUMBER env var or 'local')"
+        default=os.environ.get('JSON_BUILD_NUMBER') or os.environ.get('BUILD_NUMBER') or 'local',
+        help="Jenkins JSON build number or identifier (default: JSON_BUILD_NUMBER / BUILD_NUMBER env var or 'local')"
     )
     parser.add_argument(
         '--output',

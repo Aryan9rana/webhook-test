@@ -79,8 +79,8 @@ def parse_arguments():
     )
     parser.add_argument(
         '--build-number',
-        default=os.environ.get('BUILD_NUMBER', 'local'),
-        help="Jenkins build number or identifier (default: BUILD_NUMBER env var or 'local')"
+        default=os.environ.get('CSV_BUILD_NUMBER') or os.environ.get('BUILD_NUMBER') or 'local',
+        help="Jenkins CSV build number or identifier (default: CSV_BUILD_NUMBER / BUILD_NUMBER env var or 'local')"
     )
     parser.add_argument(
         '--output',
