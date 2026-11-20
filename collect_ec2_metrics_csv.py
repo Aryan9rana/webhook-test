@@ -16,8 +16,8 @@ METRICS_LIST = [
     'CPUUtilization',
     'NetworkIn',
     'NetworkOut',
-    'DiskReadBytes',
-    'DiskWriteBytes',
+    'EBSReadBytes',
+    'EBSWriteBytes',
     'StatusCheckFailed'
 ]
 
@@ -36,8 +36,8 @@ CSV_HEADERS = [
     'Net In Max (MB)',
     'Net Out Avg (MB)',
     'Net Out Max (MB)',
-    'Disk Read (MB)',
-    'Disk Write (MB)',
+    'EBS Read (MB)',
+    'EBS Write (MB)',
     'Status Check'
 ]
 
@@ -152,8 +152,8 @@ def main():
             cpu_info = metrics.get('CPUUtilization', {})
             netin_info = metrics.get('NetworkIn', {})
             netout_info = metrics.get('NetworkOut', {})
-            diskr_info = metrics.get('DiskReadBytes', {})
-            diskw_info = metrics.get('DiskWriteBytes', {})
+            ebsr_info = metrics.get('EBSReadBytes', {})
+            ebsw_info = metrics.get('EBSWriteBytes', {})
 
             row = {
                 'Name': tags.get('Name', '-'),
@@ -170,8 +170,8 @@ def main():
                 'Net In Max (MB)': to_mb(netin_info.get('Maximum')),
                 'Net Out Avg (MB)': to_mb(netout_info.get('Average')),
                 'Net Out Max (MB)': to_mb(netout_info.get('Maximum')),
-                'Disk Read (MB)': to_mb(diskr_info.get('Average')),
-                'Disk Write (MB)': to_mb(diskw_info.get('Average')),
+                'EBS Read (MB)': to_mb(ebsr_info.get('Average')),
+                'EBS Write (MB)': to_mb(ebsw_info.get('Average')),
                 'Status Check': status_str
             }
             rows.append(row)

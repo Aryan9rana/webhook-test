@@ -15,8 +15,8 @@ METRICS_LIST = [
     'CPUUtilization',
     'NetworkIn',
     'NetworkOut',
-    'DiskReadBytes',
-    'DiskWriteBytes',
+    'EBSReadBytes',
+    'EBSWriteBytes',
     'StatusCheckFailed'
 ]
 

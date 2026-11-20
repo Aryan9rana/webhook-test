@@ -1,12 +1,12 @@
-Name,State,Instance ID,Instance Type,Public IP,Private IP,Availability Zone,Launch Time (UTC),CPU Avg (%),CPU Max (%),Net In Avg (MB),Net In Max (MB),Net Out Avg (MB),Net Out Max (MB),Disk Read (MB),Disk Write (MB),Status Check
+Name,State,Instance ID,Instance Type,Public IP,Private IP,Availability Zone,Launch Time (UTC),CPU Avg (%),CPU Max (%),Net In Avg (MB),Net In Max (MB),Net Out Avg (MB),Net Out Max (MB),EBS Read (MB),EBS Write (MB),Status Check
 {% for inst in raw_instances | default([]) %}
 {% set name_tag = (inst.Tags | default([]) | selectattr('Key', 'equalto', 'Name') | map(attribute='Value') | first) | default('-') %}
 {% set launch_fmt = inst.LaunchTime[:16] | replace('T', ' ') if inst.LaunchTime is defined else '-' %}
 {% set cpu_match = (cw_metrics_raw.results | default([]) | selectattr('item.0.InstanceId', 'equalto', inst.InstanceId) | selectattr('item.1', 'equalto', 'CPUUtilization') | first | default(none)) if inst.State.Name == 'running' else none %}
 {% set netin_match = (cw_metrics_raw.results | default([]) | selectattr('item.0.InstanceId', 'equalto', inst.InstanceId) | selectattr('item.1', 'equalto', 'NetworkIn') | first | default(none)) if inst.State.Name == 'running' else none %}
 {% set netout_match = (cw_metrics_raw.results | default([]) | selectattr('item.0.InstanceId', 'equalto', inst.InstanceId) | selectattr('item.1', 'equalto', 'NetworkOut') | first | default(none)) if inst.State.Name == 'running' else none %}
-{% set diskr_match = (cw_metrics_raw.results | default([]) | selectattr('item.0.InstanceId', 'equalto', inst.InstanceId) | selectattr('item.1', 'equalto', 'DiskReadBytes') | first | default(none)) if inst.State.Name == 'running' else none %}
-{% set diskw_match = (cw_metrics_raw.results | default([]) | selectattr('item.0.InstanceId', 'equalto', inst.InstanceId) | selectattr('item.1', 'equalto', 'DiskWriteBytes') | first | default(none)) if inst.State.Name == 'running' else none %}
+{% set diskr_match = (cw_metrics_raw.results | default([]) | selectattr('item.0.InstanceId', 'equalto', inst.InstanceId) | selectattr('item.1', 'equalto', 'EBSReadBytes') | first | default(none)) if inst.State.Name == 'running' else none %}
+{% set diskw_match = (cw_metrics_raw.results | default([]) | selectattr('item.0.InstanceId', 'equalto', inst.InstanceId) | selectattr('item.1', 'equalto', 'EBSWriteBytes') | first | default(none)) if inst.State.Name == 'running' else none %}
 {% set status_match = (cw_metrics_raw.results | default([]) | selectattr('item.0.InstanceId', 'equalto', inst.InstanceId) | selectattr('item.1', 'equalto', 'StatusCheckFailed') | first | default(none)) if inst.State.Name == 'running' else none %}
 {% set cpu_dp = ((cpu_match.stdout | from_json).Datapoints | default([]))[0] if (cpu_match and cpu_match.stdout is defined and ((cpu_match.stdout | from_json).Datapoints | default([]) | length > 0)) else none %}
 {% set netin_dp = ((netin_match.stdout | from_json).Datapoints | default([]))[0] if (netin_match and netin_match.stdout is defined and ((netin_match.stdout | from_json).Datapoints | default([]) | length > 0)) else none %}

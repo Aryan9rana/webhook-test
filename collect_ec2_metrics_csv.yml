@@ -12,8 +12,8 @@
       - CPUUtilization
       - NetworkIn
       - NetworkOut
-      - DiskReadBytes
-      - DiskWriteBytes
+      - EBSReadBytes
+      - EBSWriteBytes
       - StatusCheckFailed
 
   tasks:
