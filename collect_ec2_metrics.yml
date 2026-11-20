@@ -7,7 +7,7 @@
   vars:
     aws_region: "{{ lookup('env', 'AWS_REGION') | default('us-east-1', true) }}"
     build_number: "{{ lookup('env', 'BUILD_NUMBER') | default('local', true) }}"
-    output_filename: "ec2-report-{{ build_number }}.json"
+    output_filename: "ec2-report-ansible-{{ build_number }}.json"
     metrics_list:
       - CPUUtilization
       - NetworkIn

@@ -1,0 +1,80 @@
+---
+- name: Collect EC2 Metadata and CloudWatch Metrics as CSV
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    aws_region: "{{ lookup('env', 'AWS_REGION') | default('us-east-1', true) }}"
+    build_number: "{{ lookup('env', 'BUILD_NUMBER') | default('local', true) }}"
+    output_filename: "ec2-report-ansible-{{ build_number }}.csv"
+    metrics_list:
+      - CPUUtilization
+      - NetworkIn
+      - NetworkOut
+      - DiskReadBytes
+      - DiskWriteBytes
+      - StatusCheckFailed
+
+  tasks:
+    - name: Compute 1-hour UTC time window
+      ansible.builtin.command:
+        cmd: >-
+          python3 -c "from datetime import datetime, timedelta, timezone;
+          now = datetime.now(timezone.utc);
+          print((now - timedelta(hours=1)).strftime('%Y-%m-%dT%H:%M:%SZ'));
+          print(now.strftime('%Y-%m-%dT%H:%M:%SZ'))"
+      register: time_window
+      changed_when: false
+
+    - name: Set time window facts
+      ansible.builtin.set_fact:
+        start_time: "{{ time_window.stdout_lines[0] }}"
+        end_time: "{{ time_window.stdout_lines[1] }}"
+
+    - name: Describe EC2 instances
+      ansible.builtin.command:
+        cmd: >-
+          aws ec2 describe-instances
+          --region {{ aws_region }}
+          --output json
+      register: ec2_raw
+      changed_when: false
+
+    - name: Parse EC2 data and flatten instance list
+      ansible.builtin.set_fact:
+        raw_instances: "{{ (ec2_raw.stdout | from_json).Reservations | default([]) | map(attribute='Instances') | flatten }}"
+
+    - name: Identify running instances for metrics query
+      ansible.builtin.set_fact:
+        running_instances: "{{ raw_instances | selectattr('State.Name', 'equalto', 'running') | list }}"
+
+    - name: Query CloudWatch metrics for running instances
+      ansible.builtin.command:
+        cmd: >-
+          aws cloudwatch get-metric-statistics
+          --region {{ aws_region }}
+          --namespace AWS/EC2
+          --metric-name {{ item.1 }}
+          --dimensions Name=InstanceId,Value={{ item.0.InstanceId }}
+          --start-time {{ start_time }}
+          --end-time {{ end_time }}
+          --period 3600
+          --statistics Average Maximum
+          --output json
+      loop: "{{ running_instances | product(metrics_list) | list }}"
+      loop_control:
+        label: "{{ item.0.InstanceId }} - {{ item.1 }}"
+      register: cw_metrics_raw
+      when: running_instances | length > 0
+      changed_when: false
+
+    - name: Render CSV report file from template
+      ansible.builtin.template:
+        src: templates/ec2_report.csv.j2
+        dest: "{{ output_filename }}"
+        mode: '0644'
+
+    - name: Output summary
+      ansible.builtin.debug:
+        msg: "Successfully generated CSV report at {{ output_filename }} with {{ raw_instances | length }} instances ({{ running_instances | length }} running)."

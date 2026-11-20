@@ -27,7 +27,7 @@ pipeline {
 
     post {
         always {
-            sh 'rm -f ec2-report-${BUILD_NUMBER}.json'
+            sh 'rm -f ec2-report-ansible-${BUILD_NUMBER}.json'
         }
     }
 }

@@ -42,7 +42,7 @@ def parse_arguments():
     parser.add_argument(
         '--output',
         default=None,
-        help="Output JSON filename (default: ec2-report-<build_number>.json)"
+        help="Output JSON filename (default: ec2-report-python-<build_number>.json)"
     )
     return parser.parse_args()
 
@@ -51,7 +51,7 @@ def main():
     args = parse_arguments()
     region = args.region
     build_num = args.build_number
-    output_filename = args.output or f"ec2-report-{build_num}.json"
+    output_filename = args.output or f"ec2-report-python-{build_num}.json"
 
     now = datetime.now(timezone.utc)
     start_time = (now - timedelta(hours=1)).strftime('%Y-%m-%dT%H:%M:%SZ')
