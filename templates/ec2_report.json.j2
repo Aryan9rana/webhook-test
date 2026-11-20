@@ -1,0 +1,40 @@
+{
+  "GeneratedAtUTC": "{{ end_time }}",
+  "Region": "{{ aws_region }}",
+  "Instances": [
+{% for inst in raw_instances | default([]) %}
+  {% set name_tag = (inst.Tags | default([]) | selectattr('Key', 'equalto', 'Name') | map(attribute='Value') | first) | default(none) %}
+    {
+      "InstanceId": "{{ inst.InstanceId }}",
+      "Name": {{ name_tag | to_json }},
+      "State": "{{ inst.State.Name | default('') }}",
+      "InstanceType": "{{ inst.InstanceType | default('') }}",
+      "LaunchTime": "{{ inst.LaunchTime | default('') }}",
+      "PrivateIP": {{ inst.PrivateIpAddress | default(none) | to_json }},
+      "PublicIP": {{ inst.PublicIpAddress | default(none) | to_json }},
+      "AvailabilityZone": "{{ inst.Placement.AvailabilityZone | default('') }}",
+      "MetricsLast1Hour": {
+{% if inst.State.Name == 'running' and cw_metrics_raw.results is defined %}
+  {% for metric in metrics_list %}
+    {% set match = cw_metrics_raw.results | selectattr('item.0.InstanceId', 'equalto', inst.InstanceId) | selectattr('item.1', 'equalto', metric) | first | default(none) %}
+    {% if match and match.stdout is defined %}
+      {% set dps = (match.stdout | from_json).Datapoints | default([]) %}
+      {% if dps | length > 0 %}
+        "{{ metric }}": {
+          "Average": {{ (dps[0].Average | default(0)) | round(4) }},
+          "Maximum": {{ (dps[0].Maximum | default(0)) | round(4) }},
+          "Unit": {{ dps[0].Unit | default(none) | to_json }}
+        }{{ "," if not loop.last else "" }}
+      {% else %}
+        "{{ metric }}": null{{ "," if not loop.last else "" }}
+      {% endif %}
+    {% else %}
+      "{{ metric }}": null{{ "," if not loop.last else "" }}
+    {% endif %}
+  {% endfor %}
+{% endif %}
+      }
+    }{{ "," if not loop.last else "" }}
+{% endfor %}
+  ]
+}
