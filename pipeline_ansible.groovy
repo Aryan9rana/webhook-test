@@ -20,7 +20,7 @@ pipeline {
 
         stage('Upload Report to S3') {
             steps {
-                sh 'aws s3 cp ec2-report-${BUILD_NUMBER}.json s3://${S3_BUCKET}/${S3_FOLDER}/'
+                sh 'aws s3 cp ec2-report-ansible-${BUILD_NUMBER}.json s3://${S3_BUCKET}/${S3_FOLDER}/'
             }
         }
     }
