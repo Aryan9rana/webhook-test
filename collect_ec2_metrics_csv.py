@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """
 Collects EC2 metadata and CloudWatch metrics for instances in a given AWS region
-and saves the output to a clean, human-readable CSV report.
+and saves the output to a clean, human-readable CSV report using Boto3 (AWS SDK for Python).
 """
 
 import argparse
 import csv
-import json
 import os
-import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
+
+import boto3
+from botocore.exceptions import BotoCoreError, ClientError
 
 METRICS_LIST = [
     'CPUUtilization',
@@ -42,12 +43,6 @@ CSV_HEADERS = [
 ]
 
 
-def run_aws(cmd):
-    """Execute an AWS CLI command and return parsed JSON."""
-    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-    return json.loads(result.stdout)
-
-
 def to_mb(bytes_val):
     if bytes_val is None or bytes_val == '':
         return '-'
@@ -60,18 +55,20 @@ def to_pct(pct_val):
     return f"{float(pct_val):.2f}%"
 
 
-def format_launch_time(iso_str):
-    if not iso_str:
+def format_launch_time(dt_val):
+    if not dt_val:
         return '-'
+    if isinstance(dt_val, datetime):
+        return dt_val.strftime('%Y-%m-%d %H:%M')
     try:
-        dt = datetime.fromisoformat(iso_str)
+        dt = datetime.fromisoformat(str(dt_val))
         return dt.strftime('%Y-%m-%d %H:%M')
     except Exception:
-        return iso_str[:16].replace('T', ' ')
+        return str(dt_val)[:16].replace('T', ' ')
 
 
 def parse_arguments():
-    parser = argparse.ArgumentParser(description="Collect EC2 metadata and CloudWatch metrics as human-readable CSV.")
+    parser = argparse.ArgumentParser(description="Collect EC2 metadata and CloudWatch metrics as human-readable CSV using Boto3.")
     parser.add_argument(
         '--region',
         default=os.environ.get('AWS_REGION', 'us-east-1'),
@@ -97,84 +94,89 @@ def main():
     output_filename = args.output or f"ec2-report-python-{build_num}.csv"
 
     now = datetime.now(timezone.utc)
-    start_time = (now - timedelta(hours=1)).strftime('%Y-%m-%dT%H:%M:%SZ')
-    end_time = now.strftime('%Y-%m-%dT%H:%M:%SZ')
+    start_time = now - timedelta(hours=1)
+    end_time = now
 
-    print(f"Querying EC2 instances in region: {region}...")
+    print(f"Querying EC2 instances in region: {region} via Boto3...")
     try:
-        ec2_data = run_aws(['aws', 'ec2', 'describe-instances', '--region', region, '--output', 'json'])
-    except subprocess.CalledProcessError as err:
-        print(f"Error executing AWS CLI: {err.stderr}", file=sys.stderr)
+        ec2 = boto3.client('ec2', region_name=region)
+        cw = boto3.client('cloudwatch', region_name=region)
+        paginator = ec2.get_paginator('describe_instances')
+        page_iterator = paginator.paginate()
+    except (ClientError, BotoCoreError) as err:
+        print(f"Error initializing Boto3 client: {err}", file=sys.stderr)
         sys.exit(1)
 
     rows = []
 
-    for res in ec2_data.get('Reservations', []):
-        for inst in res.get('Instances', []):
-            inst_id = inst['InstanceId']
-            tags = {t['Key']: t['Value'] for t in inst.get('Tags', [])}
-            state = inst.get('State', {}).get('Name', '-')
+    try:
+        for page in page_iterator:
+            for res in page.get('Reservations', []):
+                for inst in res.get('Instances', []):
+                    inst_id = inst['InstanceId']
+                    tags = {t['Key']: t['Value'] for t in inst.get('Tags', [])}
+                    state = inst.get('State', {}).get('Name', '-')
 
-            metrics = {}
-            if state == 'running':
-                for metric in METRICS_LIST:
-                    try:
-                        cw_data = run_aws([
-                            'aws', 'cloudwatch', 'get-metric-statistics',
-                            '--region', region,
-                            '--namespace', 'AWS/EC2',
-                            '--metric-name', metric,
-                            '--dimensions', f'Name=InstanceId,Value={inst_id}',
-                            '--start-time', start_time,
-                            '--end-time', end_time,
-                            '--period', '3600',
-                            '--statistics', 'Average', 'Maximum',
-                            '--output', 'json'
-                        ])
-                        datapoints = cw_data.get('Datapoints', [])
-                        if datapoints:
-                            dp = datapoints[0]
-                            metrics[metric] = {
-                                'Average': dp.get('Average'),
-                                'Maximum': dp.get('Maximum')
-                            }
-                    except subprocess.CalledProcessError as err:
-                        print(f"Warning: Failed to fetch metric {metric} for instance {inst_id}: {err.stderr.strip()}", file=sys.stderr)
+                    metrics = {}
+                    if state == 'running':
+                        for metric in METRICS_LIST:
+                            try:
+                                cw_data = cw.get_metric_statistics(
+                                    Namespace='AWS/EC2',
+                                    MetricName=metric,
+                                    Dimensions=[{'Name': 'InstanceId', 'Value': inst_id}],
+                                    StartTime=start_time,
+                                    EndTime=end_time,
+                                    Period=3600,
+                                    Statistics=['Average', 'Maximum']
+                                )
+                                datapoints = cw_data.get('Datapoints', [])
+                                if datapoints:
+                                    dp = datapoints[0]
+                                    metrics[metric] = {
+                                        'Average': dp.get('Average'),
+                                        'Maximum': dp.get('Maximum')
+                                    }
+                            except (ClientError, BotoCoreError) as err:
+                                print(f"Warning: Failed to fetch metric {metric} for instance {inst_id}: {err}", file=sys.stderr)
 
-            # Format status check
-            status_info = metrics.get('StatusCheckFailed', {})
-            status_avg = status_info.get('Average')
-            if status_avg is not None:
-                status_str = 'Healthy' if float(status_avg) == 0.0 else f'Failed ({status_avg})'
-            else:
-                status_str = '-'
+                    # Format status check
+                    status_info = metrics.get('StatusCheckFailed', {})
+                    status_avg = status_info.get('Average')
+                    if status_avg is not None:
+                        status_str = 'Healthy' if float(status_avg) == 0.0 else f'Failed ({status_avg})'
+                    else:
+                        status_str = '-'
 
-            cpu_info = metrics.get('CPUUtilization', {})
-            netin_info = metrics.get('NetworkIn', {})
-            netout_info = metrics.get('NetworkOut', {})
-            ebsr_info = metrics.get('EBSReadBytes', {})
-            ebsw_info = metrics.get('EBSWriteBytes', {})
+                    cpu_info = metrics.get('CPUUtilization', {})
+                    netin_info = metrics.get('NetworkIn', {})
+                    netout_info = metrics.get('NetworkOut', {})
+                    ebsr_info = metrics.get('EBSReadBytes', {})
+                    ebsw_info = metrics.get('EBSWriteBytes', {})
 
-            row = {
-                'Name': tags.get('Name', '-'),
-                'State': state,
-                'Instance ID': inst_id,
-                'Instance Type': inst.get('InstanceType', '-'),
-                'Public IP': inst.get('PublicIpAddress', '-'),
-                'Private IP': inst.get('PrivateIpAddress', '-'),
-                'Availability Zone': inst.get('Placement', {}).get('AvailabilityZone', '-'),
-                'Launch Time (UTC)': format_launch_time(inst.get('LaunchTime')),
-                'CPU Avg (%)': to_pct(cpu_info.get('Average')),
-                'CPU Max (%)': to_pct(cpu_info.get('Maximum')),
-                'Net In Avg (MB)': to_mb(netin_info.get('Average')),
-                'Net In Max (MB)': to_mb(netin_info.get('Maximum')),
-                'Net Out Avg (MB)': to_mb(netout_info.get('Average')),
-                'Net Out Max (MB)': to_mb(netout_info.get('Maximum')),
-                'EBS Read (MB)': to_mb(ebsr_info.get('Average')),
-                'EBS Write (MB)': to_mb(ebsw_info.get('Average')),
-                'Status Check': status_str
-            }
-            rows.append(row)
+                    row = {
+                        'Name': tags.get('Name', '-'),
+                        'State': state,
+                        'Instance ID': inst_id,
+                        'Instance Type': inst.get('InstanceType', '-'),
+                        'Public IP': inst.get('PublicIpAddress', '-'),
+                        'Private IP': inst.get('PrivateIpAddress', '-'),
+                        'Availability Zone': inst.get('Placement', {}).get('AvailabilityZone', '-'),
+                        'Launch Time (UTC)': format_launch_time(inst.get('LaunchTime')),
+                        'CPU Avg (%)': to_pct(cpu_info.get('Average')),
+                        'CPU Max (%)': to_pct(cpu_info.get('Maximum')),
+                        'Net In Avg (MB)': to_mb(netin_info.get('Average')),
+                        'Net In Max (MB)': to_mb(netin_info.get('Maximum')),
+                        'Net Out Avg (MB)': to_mb(netout_info.get('Average')),
+                        'Net Out Max (MB)': to_mb(netout_info.get('Maximum')),
+                        'EBS Read (MB)': to_mb(ebsr_info.get('Average')),
+                        'EBS Write (MB)': to_mb(ebsw_info.get('Average')),
+                        'Status Check': status_str
+                    }
+                    rows.append(row)
+    except (ClientError, BotoCoreError) as err:
+        print(f"Error querying EC2 via Boto3: {err}", file=sys.stderr)
+        sys.exit(1)
 
     with open(output_filename, 'w', newline='', encoding='utf-8') as f:
         writer = csv.DictWriter(f, fieldnames=CSV_HEADERS)

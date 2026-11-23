@@ -9,6 +9,12 @@ pipeline {
     }
 
     stages {
+        stage('Install Dependencies') {
+            steps {
+                sh 'pip3 install --quiet -r requirements.txt'
+            }
+        }
+
         stage('Collect EC2 Metadata & CloudWatch Metrics') {
             steps {
                 sh 'python3 collect_ec2_metrics.py --region ${AWS_REGION} --build-number ${JSON_BUILD_NUMBER}'

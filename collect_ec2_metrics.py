@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 """
 Collects EC2 metadata and CloudWatch metrics for instances in a given AWS region
-and saves the output to a JSON report.
+and saves the output to a JSON report using Boto3 (AWS SDK for Python).
 """
 
 import argparse
 import json
 import os
-import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
+
+import boto3
+from botocore.exceptions import BotoCoreError, ClientError
 
 METRICS_LIST = [
     'CPUUtilization',
@@ -21,14 +23,8 @@ METRICS_LIST = [
 ]
 
 
-def run_aws(cmd):
-    """Execute an AWS CLI command and return parsed JSON."""
-    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-    return json.loads(result.stdout)
-
-
 def parse_arguments():
-    parser = argparse.ArgumentParser(description="Collect EC2 metadata and CloudWatch metrics.")
+    parser = argparse.ArgumentParser(description="Collect EC2 metadata and CloudWatch metrics using Boto3.")
     parser.add_argument(
         '--region',
         default=os.environ.get('AWS_REGION', 'us-east-1'),
@@ -54,69 +50,77 @@ def main():
     output_filename = args.output or f"ec2-report-python-{build_num}.json"
 
     now = datetime.now(timezone.utc)
-    start_time = (now - timedelta(hours=1)).strftime('%Y-%m-%dT%H:%M:%SZ')
-    end_time = now.strftime('%Y-%m-%dT%H:%M:%SZ')
+    start_time = now - timedelta(hours=1)
+    end_time = now
 
-    print(f"Querying EC2 instances in region: {region}...")
+    print(f"Querying EC2 instances in region: {region} via Boto3...")
     try:
-        ec2_data = run_aws(['aws', 'ec2', 'describe-instances', '--region', region, '--output', 'json'])
-    except subprocess.CalledProcessError as err:
-        print(f"Error executing AWS CLI: {err.stderr}", file=sys.stderr)
+        ec2 = boto3.client('ec2', region_name=region)
+        cw = boto3.client('cloudwatch', region_name=region)
+        paginator = ec2.get_paginator('describe_instances')
+        page_iterator = paginator.paginate()
+    except (ClientError, BotoCoreError) as err:
+        print(f"Error initializing Boto3 client: {err}", file=sys.stderr)
         sys.exit(1)
 
     report = {
-        'GeneratedAtUTC': end_time,
+        'GeneratedAtUTC': end_time.strftime('%Y-%m-%dT%H:%M:%SZ'),
         'Region': region,
         'Instances': []
     }
 
-    for res in ec2_data.get('Reservations', []):
-        for inst in res.get('Instances', []):
-            inst_id = inst['InstanceId']
-            tags = {t['Key']: t['Value'] for t in inst.get('Tags', [])}
-            state = inst.get('State', {}).get('Name')
+    try:
+        for page in page_iterator:
+            for res in page.get('Reservations', []):
+                for inst in res.get('Instances', []):
+                    inst_id = inst['InstanceId']
+                    tags = {t['Key']: t['Value'] for t in inst.get('Tags', [])}
+                    state = inst.get('State', {}).get('Name')
 
-            metrics_summary = {}
-            if state == 'running':
-                for metric in METRICS_LIST:
-                    try:
-                        cw_data = run_aws([
-                            'aws', 'cloudwatch', 'get-metric-statistics',
-                            '--region', region,
-                            '--namespace', 'AWS/EC2',
-                            '--metric-name', metric,
-                            '--dimensions', f'Name=InstanceId,Value={inst_id}',
-                            '--start-time', start_time,
-                            '--end-time', end_time,
-                            '--period', '3600',
-                            '--statistics', 'Average', 'Maximum',
-                            '--output', 'json'
-                        ])
-                        datapoints = cw_data.get('Datapoints', [])
-                        if datapoints:
-                            dp = datapoints[0]
-                            metrics_summary[metric] = {
-                                'Average': round(dp.get('Average', 0), 4),
-                                'Maximum': round(dp.get('Maximum', 0), 4),
-                                'Unit': dp.get('Unit')
-                            }
-                        else:
-                            metrics_summary[metric] = None
-                    except subprocess.CalledProcessError as err:
-                        print(f"Warning: Failed to fetch metric {metric} for instance {inst_id}: {err.stderr.strip()}", file=sys.stderr)
-                        metrics_summary[metric] = None
+                    metrics_summary = {}
+                    if state == 'running':
+                        for metric in METRICS_LIST:
+                            try:
+                                cw_data = cw.get_metric_statistics(
+                                    Namespace='AWS/EC2',
+                                    MetricName=metric,
+                                    Dimensions=[{'Name': 'InstanceId', 'Value': inst_id}],
+                                    StartTime=start_time,
+                                    EndTime=end_time,
+                                    Period=3600,
+                                    Statistics=['Average', 'Maximum']
+                                )
+                                datapoints = cw_data.get('Datapoints', [])
+                                if datapoints:
+                                    dp = datapoints[0]
+                                    metrics_summary[metric] = {
+                                        'Average': round(dp.get('Average', 0), 4),
+                                        'Maximum': round(dp.get('Maximum', 0), 4),
+                                        'Unit': dp.get('Unit')
+                                    }
+                                else:
+                                    metrics_summary[metric] = None
+                            except (ClientError, BotoCoreError) as err:
+                                print(f"Warning: Failed to fetch metric {metric} for instance {inst_id}: {err}", file=sys.stderr)
+                                metrics_summary[metric] = None
 
-            report['Instances'].append({
-                'InstanceId': inst_id,
-                'Name': tags.get('Name'),
-                'State': state,
-                'InstanceType': inst.get('InstanceType'),
-                'LaunchTime': inst.get('LaunchTime'),
-                'PrivateIP': inst.get('PrivateIpAddress'),
-                'PublicIP': inst.get('PublicIpAddress'),
-                'AvailabilityZone': inst.get('Placement', {}).get('AvailabilityZone'),
-                'MetricsLast1Hour': metrics_summary
-            })
+                    launch_time = inst.get('LaunchTime')
+                    launch_time_str = launch_time.isoformat() if hasattr(launch_time, 'isoformat') else (str(launch_time) if launch_time else None)
+
+                    report['Instances'].append({
+                        'InstanceId': inst_id,
+                        'Name': tags.get('Name'),
+                        'State': state,
+                        'InstanceType': inst.get('InstanceType'),
+                        'LaunchTime': launch_time_str,
+                        'PrivateIP': inst.get('PrivateIpAddress'),
+                        'PublicIP': inst.get('PublicIpAddress'),
+                        'AvailabilityZone': inst.get('Placement', {}).get('AvailabilityZone'),
+                        'MetricsLast1Hour': metrics_summary
+                    })
+    except (ClientError, BotoCoreError) as err:
+        print(f"Error querying EC2 via Boto3: {err}", file=sys.stderr)
+        sys.exit(1)
 
     with open(output_filename, 'w') as f:
         json.dump(report, f, indent=2)
